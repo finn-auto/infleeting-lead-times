@@ -99,7 +99,16 @@ Key quotes and insights:
 
 ## 3. What We Found
 
-### 3.1 Compound lead time accuracy (the meaningful metric)
+### 3.1 Fleet Layer — ETA Accuracy & Ordered→Arrived duration (Fleet-owned)
+
+The Fleet phase (ordered → arrived_from_supplier) is the longest part of the lifecycle for most brands. We CAN directly measure Fleet ETA accuracy because `estimated_arrival_from_supplier_date` is stored in `car_events` snapshots, and `car_estimated_arrival_from_compound_date_updated` events fire on each ETA change.
+
+- **Fleet ETA accuracy**: Measured by comparing the first ETA prediction per car against the actual `arrived_from_supplier` date. MAE (mean absolute error), % within ±1 week, and % within ±2 weeks per brand/compound.
+- **Cars without ETA**: Some brands (especially Stellantis) have cars with no ETA at all — `max(ETA, now)` defaults to `now`, making the Available From pure guesswork.
+- **Fleet phase dominates**: For many brands, ordered→arrived is >70% of the total lifecycle (e.g., Stellantis brands: 69-256 days median)
+- **High variance**: The Fleet phase has extreme skew — most cars arrive quickly, but outliers get stuck for months (likely OEM delivery delays, financing blockers, missing call-offs)
+
+### 3.2 Infleeting Layer — Compound lead time accuracy (Infleeting-owned)
 
 Comparing API `t_arrived` (predicted days from compound arrival to subscription) against actual medians:
 
@@ -107,7 +116,7 @@ Comparing API `t_arrived` (predicted days from compound arrival to subscription)
 - **Overestimated** (cars faster than predicted): Common for arrived→techprep phase — many brands complete PDI faster than the buffer allows
 - **Underestimated** (cars slower than predicted): Common for ready→subscription — cars wait longer for subscriber matching than the 5-9 day prediction
 
-### 3.2 Discrepancies between ops reference sheet and actual API code
+### 3.3 Discrepancies between ops reference sheet and actual API code
 
 | Brand/Compound | Sheet Value | Actual Code | Delta |
 |---|---|---|---|
@@ -120,7 +129,7 @@ Comparing API `t_arrived` (predicted days from compound arrival to subscription)
 
 **The ops reference sheet is out of sync with the deployed code.** Neither is fully correct — both need recalibration against actual data.
 
-### 3.3 Massive skew in early phases
+### 3.4 Massive skew in early phases
 
 The avg/median ratio reveals data quality issues:
 
@@ -133,7 +142,7 @@ The avg/median ratio reveals data quality issues:
 
 These indicate that most cars skip the phase instantly (median ~0-2d) but a significant minority gets stuck for weeks/months — likely due to financing blockers, call-off problems, or lifecycle state misuse.
 
-### 3.4 Lifecycle state skipping
+### 3.5 Lifecycle state skipping
 
 Several brands routinely skip `tech_prep_done`:
 - **MG, BYD**: Often skip tech_prep (noted in API comments)
@@ -141,14 +150,14 @@ Several brands routinely skip `tech_prep_done`:
 
 When a state is skipped, the API's lead time for that state becomes meaningless — the car jumps directly from `arrived` to `ready`, making the `t_techprep` value irrelevant.
 
-### 3.5 Ready→Subscription is universally underestimated
+### 3.6 Ready→Subscription is universally underestimated (Infleeting-owned)
 
 Across nearly all brands, the actual median for ready→subscription exceeds the API prediction:
 - API typically predicts 5-9 days (working days converted)
 - Reality is often 8-29 days median
 - This is a **demand/matching problem**, not a logistics problem — cars are physically ready but waiting for a subscriber
 
-### 3.6 The Stellantis problem (Lena's "aufregen")
+### 3.7 The Stellantis problem (Lena's "aufregen") — Fleet + Infleeting combined
 
 Stellantis brands (Fiat, Jeep, Alfa Romeo, Peugeot, Citroen, DS, Opel) have the worst predictions because:
 1. Cars go online in `ordered` with no VIN and no production date
@@ -161,9 +170,9 @@ Stellantis brands (Fiat, Jeep, Alfa Romeo, Peugeot, Citroen, DS, Opel) have the 
 
 ## 4. What We Can Improve
 
-### 4.1 Short-term: Recalibrate compound lead times in the API
+### 4.1 Short-term: Recalibrate compound lead times in the API (Infleeting-owned)
 
-**Impact: High | Effort: Low**
+**Impact: High | Effort: Low | Owner: Infleeting**
 
 Update `arrived-from-supplier-lead-times.ts`, `tech-preparation-done-lead-times.ts`, and `ready-to-deliver-lead-times.ts` with data-driven values from the notebook analysis. These are direct code changes to static values.
 
@@ -180,14 +189,16 @@ The Google Sheet used by ops and the actual deployed code have diverged. Either:
 - Auto-generate the sheet from code (preferred), or
 - Add a CI check that validates sheet values against code
 
-### 4.3 Medium-term: Separate ETA accuracy from compound lead time accuracy
+### 4.3 Medium-term: Improve Fleet ETA accuracy (Fleet-owned)
 
-**Impact: High | Effort: Medium**
+**Impact: High | Effort: Medium | Owner: Fleet**
 
-The current system conflates two independent predictions. To improve:
-1. **Track Fleet ETA accuracy** separately: compare ETA at car creation vs actual `arrived_from_supplier` date
-2. **Flag cars with no/stale ETA**: If `max(ETA, now) = now` for an ordered car, the Available From is pure guesswork — surface this to ops
-3. **Recalculate Available From when ETA updates**: Currently unclear if this happens consistently
+The Fleet phase (ordered→arrived) is the largest source of total prediction error for most brands. We now measure ETA accuracy using `estimated_arrival_from_supplier_date` from `car_events` snapshots. To improve:
+1. **Act on measured ETA accuracy**: The notebook shows MAE and within-±1wk/±2wk rates per brand — use this to prioritize OEM-specific ETA improvements
+2. **Close the no-ETA gap**: Brands with high % of cars without any ETA (Stellantis) need OEM Delivery Plan integration
+3. **Flag cars with no/stale ETA**: If `max(ETA, now) = now` for an ordered car, the Available From is pure guesswork — surface this to ops
+4. **Recalculate Available From when ETA updates**: Currently unclear if this happens consistently
+5. **Build an ETA accuracy dashboard**: Track drift over time per OEM to hold suppliers accountable
 
 ### 4.4 Medium-term: Add percentile-based deviation windows
 
